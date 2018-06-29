@@ -84,29 +84,25 @@ def run_command(cmd, raise_exception=True, log_output=True, environ=None,
                                 stderr=subprocess.PIPE,
                                 env=environ,
                                 shell=shell)
-        lines = proc.stdout
-        stdout = []
-        for line in lines:
-            decoded_line = line.decode('ascii', 'ignore').rstrip()
-            stdout.append(decoded_line)
-            if show_output:
-                LOG.info(decoded_line)
-            elif log_output:
-                LOG.debug(decoded_line)
-        lines = proc.stderr
-        stderr = []
-        for line in lines:
-            decoded_line = line.decode('ascii', 'ignore').rstrip()
-            stderr.append(decoded_line)
-            if show_output:
-                LOG.info(decoded_line)
-            elif log_output:
-                LOG.debug(decoded_line)
+
+        def process_output(output, *, show_output=False, log_output=False):
+            result = []
+            for line in output:
+                decoded_line = line.decode('ascii', 'ignore').rstrip()
+                if show_output:
+                    LOG.info(decoded_line)
+                elif log_output:
+                    LOG.debug(decoded_line)
+                result.append(decoded_line)
+            return result
+
+        stdout = process_output(proc.stdout, show_output=show_output, log_output=log_output)
+        stderr = process_output(proc.stderr, show_output=show_output, )
 
         if proc.poll() and raise_exception:
             if stderr:
                 LOG.debug("Error {0}".format('\n'.join(stderr)))
-            raise Exception("{0}".format(cmd))
+            raise Exception(cmd)
         return stdout, proc.returncode
     except Exception as exep:
         if raise_exception:
