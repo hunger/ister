@@ -62,8 +62,13 @@ except:
     sys.modules["pycryptsetup"] = pycrypts
     import pycryptsetup
 
-import ister
-import ister_gui
+import os
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__),
+                                                '..')))
+
+import ister.main as ister
+import ister.gui as ister_gui
 
 COMMAND_RESULTS = []
 
