@@ -551,26 +551,6 @@ def add_user_key_wrapper(func):
     return wrapper
 
 
-def run_command_good():
-    """Good run_command test"""
-    ister.run_command("true")
-
-
-def run_command_bad():
-    """Bad run_command test"""
-    exception_flag = False
-    try:
-        ister.run_command("not-a-binary", False)
-    except Exception:
-        raise Exception("Command raised exception with surpression enabled")
-    try:
-        ister.run_command("not-a-binary")
-    except Exception:
-        exception_flag = True
-    if not exception_flag:
-        raise Exception("Bad command did not fail")
-
-
 @run_command_wrapper
 def create_virtual_disk_good_meg():
     """Create disk with size specified in megabytes"""
@@ -5459,8 +5439,6 @@ if __name__ == '__main__':
     ister.LOG = log_wrapper()
 
     TESTS = [
-        run_command_good,
-        run_command_bad,
         create_virtual_disk_good_meg,
         create_virtual_disk_good_gig,
         create_virtual_disk_good_tera,

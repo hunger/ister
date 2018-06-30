@@ -2,6 +2,7 @@
 *.pyc
 *.xz
 .*.swp
+.pytest_cache/
 Makefile
 Makefile.in
 __pycache__/

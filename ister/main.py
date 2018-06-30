@@ -43,11 +43,9 @@ import json
 import os
 import pwd
 import re
-import shlex
 import shutil
 import socket
 import stat
-import subprocess
 import sys
 import tempfile
 import time
@@ -60,54 +58,11 @@ import netifaces
 # import pycryptsetup
 
 from .log import (setup_logging, debug, info, error)
+from .run_command import run_command
 
 
 # FIXME: Reset to False!
 DEBUG = True
-
-
-def run_command(cmd, raise_exception=True, log_output=True, environ=None,
-                show_output=False, shell=False):
-    """Execute given command in a subprocess
-
-    This function will raise an Exception if the command fails unless
-    raise_exception is False.
-    """
-    try:
-        debug("Running command {0}".format(cmd))
-        sys.stdout.flush()
-        if shell:
-            full_cmd = cmd
-        else:
-            full_cmd = shlex.split(cmd)
-        proc = subprocess.Popen(full_cmd,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE,
-                                env=environ,
-                                shell=shell)
-
-        def process_output(output, *, show_output=False, log_output=False):
-            result = []
-            for line in output:
-                decoded_line = line.decode('ascii', 'ignore').rstrip()
-                if show_output:
-                    info(decoded_line)
-                elif log_output:
-                    debug(decoded_line)
-                result.append(decoded_line)
-            return result
-
-        stdout = process_output(proc.stdout, show_output=show_output, log_output=log_output)
-        stderr = process_output(proc.stderr, show_output=show_output, )
-
-        if proc.poll() and raise_exception:
-            if stderr:
-                debug("Error {0}".format('\n'.join(stderr)))
-            raise Exception(cmd)
-        return stdout, proc.returncode
-    except Exception as exep:
-        if raise_exception:
-            raise Exception("{0} failed: {1}".format(cmd, exep))
 
 
 def validate_network(url):
