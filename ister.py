@@ -127,16 +127,18 @@ def validate_network(url):
             raise exep
 
 
+def size(input):
+    match = {"M": 1024, "G": 1024 ** 2, "T": 1024 ** 3}
+    if input == "rest":
+        return -1
+    return int(input[:-1]) * match[input[-1]]
+
+
 def create_virtual_disk(template):
     """Create virtual disk file for install target
     """
     LOG.info("Creating virtual disk")
-    image_size = 0
-    # number of kilobytes in each of the following
-    match = {"M": 1024, "G": 1024 ** 2, "T": 1024 ** 3}
-    for part in template["PartitionLayout"]:
-        if part["size"] != "rest":
-            image_size += int(part["size"][:-1]) * match[part["size"][-1]]
+    image_size = map(lambda x: size(x["size"]), template["PartitionLayout"])
 
     # Add extra buffer, note disk sizes should be multiples of 4kb.
     # Increase buffer by 1MB to give parted wiggle room due to dd using 1K
@@ -175,11 +177,7 @@ def create_partitions(template, sleep_time=1):
                        str(v["partition"])):
         if part["disk"] != cdisk:
             start = 0
-        if part["size"] == "rest":
-            end = "-1M"
-        else:
-            mult = match[part["size"][-1]]
-            end = int(part["size"][:-1]) * mult + start
+        end = size(part["size"]) + start
         if part["type"] == "EFI":
             ptype = "fat32"
         elif part["type"] == "swap":
