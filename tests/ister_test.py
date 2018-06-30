@@ -3710,50 +3710,6 @@ def handle_options_good():
         raise Exception("Incorrect default dnf config set")
 
 
-def handle_logging_good():
-    """Test handle_logging"""
-
-    class MockOpen():
-        """Simple handling of open for logging"""
-        def __init__(self, file, *_, **__):
-            """set name for testing"""
-            del __
-            self.name = file
-
-        def close(self):
-            """mock close operation"""
-            pass
-
-    backup_open = __builtins__.open
-    __builtins__.open = MockOpen
-    backup_log = ister.LOG
-    ister.LOG = ister.logging.getLogger("test")
-    try:
-        # Test for info level and logfile
-        ister.handle_logging("info", "log")
-        if len(ister.LOG.handlers) != 2:
-            raise Exception("Incorrect handler numbers")
-        if ister.LOG.handlers[1].stream.name.split('/')[-1] != "log":
-            raise Exception("Incorrect logfile name")
-        if ister.LOG.handlers[0].level != ister.logging.INFO:
-            raise Exception("Incorrect logging level for info level")
-        # Test for debug level
-        ister.LOG.handlers = []
-        ister.handle_logging("debug", "log")
-        if ister.LOG.handlers[0].level != ister.logging.DEBUG:
-            raise Exception("Incorrect logging level for debug level")
-        # Test for error level
-        ister.LOG.handlers = []
-        ister.handle_logging("error", "log")
-        if ister.LOG.handlers[0].level != ister.logging.ERROR:
-            raise Exception("Incorrect logging level for error level")
-    except Exception as exep:
-        raise exep
-    finally:
-        __builtins__.open = backup_open
-        ister.LOG = backup_log
-
-
 @run_command_wrapper
 def validate_network_good():
     """Test validate_network"""
@@ -5664,7 +5620,6 @@ if __name__ == '__main__':
         parse_config_good,
         parse_config_bad,
         handle_options_good,
-        handle_logging_good,
         check_kernel_cmdline_good,
         check_kernel_cmdline_bad_no_isterconf,
         check_kernel_cmdline_bad_urlopen_fails,

@@ -40,7 +40,6 @@
 import argparse
 import ctypes
 import json
-import logging
 import os
 import pwd
 import re
@@ -58,11 +57,13 @@ from urllib.error import URLError, HTTPError
 from urllib.parse import urlparse
 from contextlib import closing
 import netifaces
-import pycryptsetup
+# import pycryptsetup
 
-LOG = None
+from .log import (setup_logging, debug, info, error)
 
-DEBUG = False
+
+# FIXME: Reset to False!
+DEBUG = True
 
 
 def run_command(cmd, raise_exception=True, log_output=True, environ=None,
@@ -73,7 +74,7 @@ def run_command(cmd, raise_exception=True, log_output=True, environ=None,
     raise_exception is False.
     """
     try:
-        LOG.debug("Running command {0}".format(cmd))
+        debug("Running command {0}".format(cmd))
         sys.stdout.flush()
         if shell:
             full_cmd = cmd
@@ -90,9 +91,9 @@ def run_command(cmd, raise_exception=True, log_output=True, environ=None,
             for line in output:
                 decoded_line = line.decode('ascii', 'ignore').rstrip()
                 if show_output:
-                    LOG.info(decoded_line)
+                    info(decoded_line)
                 elif log_output:
-                    LOG.debug(decoded_line)
+                    debug(decoded_line)
                 result.append(decoded_line)
             return result
 
@@ -101,7 +102,7 @@ def run_command(cmd, raise_exception=True, log_output=True, environ=None,
 
         if proc.poll() and raise_exception:
             if stderr:
-                LOG.debug("Error {0}".format('\n'.join(stderr)))
+                debug("Error {0}".format('\n'.join(stderr)))
             raise Exception(cmd)
         return stdout, proc.returncode
     except Exception as exep:
@@ -112,17 +113,17 @@ def run_command(cmd, raise_exception=True, log_output=True, environ=None,
 def validate_network(url):
     """Validate there is network connection to swupd
     """
-    LOG.info("Verifying network connection")
+    info("Verifying network connection")
     url = url if url else "https://update.clearlinux.org"
     try:
         _ = request.urlopen(url, timeout=3)
     except HTTPError as exep:
         if hasattr(exep, 'code'):
-            LOG.info("SWUPD server error: {0}".format(exep.code))
+            info("SWUPD server error: {0}".format(exep.code))
             raise exep
     except URLError as exep:
         if hasattr(exep, 'reason'):
-            LOG.info("Network error: Cannot reach swupd server: {0}"
+            info("Network error: Cannot reach swupd server: {0}"
                      .format(exep.reason))
             raise exep
 
@@ -137,7 +138,7 @@ def size(input):
 def create_virtual_disk(template):
     """Create virtual disk file for install target
     """
-    LOG.info("Creating virtual disk")
+    info("Creating virtual disk")
     image_size = map(lambda x: size(x["size"]), template["PartitionLayout"])
 
     # Add extra buffer, note disk sizes should be multiples of 4kb.
@@ -152,7 +153,7 @@ def create_virtual_disk(template):
 def create_partitions(template, sleep_time=1):
     """Create partitions according to template configuration
     """
-    LOG.info("Creating partitions")
+    info("Creating partitions")
     match = {"M": 1, "G": 1024, "T": 1024 * 1024}
     parted = "parted -sa"
     alignment = "optimal"
@@ -163,7 +164,7 @@ def create_partitions(template, sleep_time=1):
         disks.add(disk["disk"])
     # Setup GPT tables on disks
     for disk in sorted(disks):
-        LOG.debug("Creating GPT label in {0}".format(disk))
+        debug("Creating GPT label in {0}".format(disk))
         if template.get("DestinationType") == "physical":
             command = "{0} {1} /dev/{2} {3} mklabel gpt".\
                       format(parted, alignment, disk, units)
@@ -188,7 +189,7 @@ def create_partitions(template, sleep_time=1):
             # Using 0% on the first partition to get the first 1MB
             # border that is correctly aligned
             start = "0%"
-        LOG.debug("Creating partition {0} in {1}".format(ptype, part["disk"]))
+        debug("Creating partition {0} in {1}".format(ptype, part["disk"]))
         if template.get("DestinationType") == "physical":
             command = "{0} {1} -- /dev/{2} {3} mkpart primary {4} {5} {6}"\
                 .format(parted, alignment, part["disk"], units, ptype,
@@ -217,7 +218,7 @@ def map_loop_device(template, sleep_time=1):
 
     This function will raise an Exception if the command fails.
     """
-    LOG.info("Mapping loop device")
+    info("Mapping loop device")
     disk_image = template["PartitionLayout"][0]["disk"]
     command = "losetup --partscan --find --show {0}".format(disk_image)
     try:
@@ -259,13 +260,13 @@ def get_device_name(template, disk):
 def create_filesystems(template):
     """Create filesystems according to template configuration
     """
-    LOG.info("Creating file systems")
+    info("Creating file systems")
     fs_util = {"ext2": "mkfs.ext2 -F", "ext3": "mkfs.ext3 -F",
                "ext4": "mkfs.ext4 -F", "btrfs": "mkfs.btrfs -f",
                "vfat": "mkfs.vfat", "swap": "mkswap", "xfs": "mkfs.xfs -f"}
     for fst in template["FilesystemTypes"]:
         (dev, prefix) = get_device_name(template, fst["disk"])
-        LOG.debug("Creating file system {0} in {1}{2}"
+        debug("Creating file system {0} in {1}{2}"
                   .format(fst["type"], dev, fst["partition"]))
         if fst.get("options"):
             command = "{0} {1} {2}{3}".format(fs_util[fst["type"]],
@@ -283,23 +284,23 @@ def create_filesystems(template):
 0657fd6d-a4ab-43c4-84e5-0933c84b4f4f"
                         .format(base_dev, fst["partition"]))
         if "disable_format" not in fst:
-            if "encryption" in fst:
-                c_dev="{0}{1}".format(dev, fst["partition"])
-                c = pycryptsetup.CryptSetup(device=c_dev)
-                c.luksFormat(cipher = "aes",
-                    cipherMode= "xts-plain64", keysize = 512, hashMode = "sha256")
-                c.addKeyByPassphrase(fst["encryption"]["passphrase"],
-                    fst["encryption"]["passphrase"])
-                c.activate(name=fst["encryption"]["name"],
-                    passphrase=fst["encryption"]["passphrase"])
-                if fst.get("options"):
-                    command = "{0} {1} /dev/mapper/{2}".format(fs_util[fst["type"]],
-                                              fst["options"],
-                                              fst["encryption"]["name"])
-                else:
-                    command = "{0} /dev/mapper/{1}".format(fs_util[fst["type"]],
-                                              fst["encryption"]["name"])
-            run_command(command)
+#            if "encryption" in fst:
+#                c_dev="{0}{1}".format(dev, fst["partition"])
+#                c = pycryptsetup.CryptSetup(device=c_dev)
+#                c.luksFormat(cipher = "aes",
+#                    cipherMode= "xts-plain64", keysize = 512, hashMode = "sha256")
+#                c.addKeyByPassphrase(fst["encryption"]["passphrase"],
+#                    fst["encryption"]["passphrase"])
+#                c.activate(name=fst["encryption"]["name"],
+#                    passphrase=fst["encryption"]["passphrase"])
+#                if fst.get("options"):
+#                    command = "{0} {1} /dev/mapper/{2}".format(fs_util[fst["type"]],
+#                                              fst["options"],
+#                                              fst["encryption"]["name"])
+#                else:
+#                    command = "{0} /dev/mapper/{1}".format(fs_util[fst["type"]],
+#                                              fst["encryption"]["name"])
+#            run_command(command)
             if fst["type"] == "swap":
                 run_command("swapon {0}{1}".format(dev, fst["partition"]),
                             raise_exception=False)
@@ -312,11 +313,11 @@ def setup_mounts(template):
 
     This function will raise an Exception on finding an error.
     """
-    LOG.info("Setting up mount points")
+    info("Setting up mount points")
     try:
         prefix = "ister-" + str(template["Version"]) + "-"
         target_dir = tempfile.mkdtemp(prefix=prefix)
-        LOG.debug("Using temporary directory: {0}".format(target_dir))
+        debug("Using temporary directory: {0}".format(target_dir))
     except Exception:
         raise Exception("Failed to setup mounts for install")
 
@@ -333,7 +334,7 @@ def setup_mounts(template):
     def create_mount_unit(filename, uuid, mount, fs_type):
         """Create mount unit file for systemd
         """
-        LOG.debug("Creating mount unit for UUID: {0}".format(uuid))
+        debug("Creating mount unit for UUID: {0}".format(uuid))
         unit = "[Unit]\nDescription = Mount for %s\n\n" % mount
         unit += "[Mount]\nWhat = PARTUUID={0}\n\
 Where = {1}\nType = {2}\n\n".format(uuid, mount, fs_type)
@@ -352,9 +353,9 @@ Where = {1}\nType = {2}\n\n".format(uuid, mount, fs_type)
             base_dev = dev[:-1]
         else:
             base_dev = dev
-        LOG.debug("Mounting {0}{1} in {2}".format(dev,
-                                                  part['partition'],
-                                                  part["mount"]))
+        debug("Mounting {0}{1} in {2}".format(dev,
+                                              part['partition'],
+                                              part["mount"]))
         fs_type = [x["type"] for x in template["FilesystemTypes"]
                    if x['disk'] == part['disk'] and
                    x['partition'] == part['partition']][-1]
@@ -414,14 +415,14 @@ def add_bundles(template, target_dir):
 
     # pylint: disable=undefined-loop-variable
     # since we never reach this point with an empty Bundles list
-    LOG.info("Installing {} bundles (and dependencies)...".format(index + 1))
+    info("Installing {} bundles (and dependencies)...".format(index + 1))
 
 
 def copy_os(args, template, target_dir):
     """Wrapper for running install command
     """
     package_manager = template["SoftwareManager"]
-    LOG.info("Starting {0}. May take several minutes".format(package_manager))
+    info("Starting {0}. May take several minutes".format(package_manager))
     if package_manager == "swupd":
         copy_os_swupd(args, template, target_dir)
     elif package_manager == "dnf":
@@ -485,7 +486,7 @@ def get_cmd_env(template):
     cmd_env = os.environ
     if template.get("HTTPSProxy"):
         cmd_env["https_proxy"] = template["HTTPSProxy"]
-        LOG.debug("https_proxy: {}".format(template["HTTPSProxy"]))
+        debug("https_proxy: {}".format(template["HTTPSProxy"]))
     return cmd_env
 
 
@@ -558,8 +559,8 @@ def add_user_fullname(user, target_dir):
             subprocess.call(command)
     except Exception as exep:
         print(exep)
-        LOG.info("Unable to set user {} full name: {}".format(user["username"],
-                                                              exep))
+        info("Unable to set user {} full name: {}".format(user["username"],
+                                                          exep))
 
 
 def add_user_key(user, target_dir):
@@ -630,7 +631,7 @@ def add_users(template, target_dir):
     if not users:
         return
 
-    LOG.info("Adding new user")
+    info("Adding new user")
     for user in users:
         create_account(user, target_dir)
         if user.get("key"):
@@ -649,7 +650,7 @@ def set_hostname(template, target_dir):
     hostname = template.get("Hostname")
     if not hostname:
         return
-    LOG.info("Setting up hostname")
+    info("Setting up hostname")
     path = '{0}/etc/'.format(target_dir)
     if not os.path.exists(path):
         os.makedirs(path)
@@ -702,7 +703,7 @@ def pre_install_shell(template):
     """
     if not template.get("PreInstallShell"):
         return
-    LOG.info("Running pre install commands")
+    info("Running pre install commands")
     for cmdl in template["PreInstallShell"]:
         run_command(cmdl, shell=True)
 
@@ -716,7 +717,7 @@ def post_install_nonchroot(template, target_dir):
     """
     if not template.get("PostNonChroot"):
         return
-    LOG.info("Running post non-chroot scripts")
+    info("Running post non-chroot scripts")
     for script in template["PostNonChroot"]:
         run_command(script + " {}".format(target_dir))
 
@@ -729,7 +730,7 @@ def post_install_nonchroot_shell(template, target_dir):
     """
     if not template.get("PostNonChrootShell"):
         return
-    LOG.info("Running post non-chroot commands")
+    info("Running post non-chroot commands")
     script_env = os.environ
     script_env["ISTER_CHROOT"] = target_dir
     for cmdl in template["PostNonChrootShell"]:
@@ -743,7 +744,7 @@ def post_install_chroot(template, target_dir):
     """
     if not template.get("PostChroot"):
         return
-    LOG.info("Running post scripts")
+    info("Running post scripts")
     with ChrootOpen(target_dir) as _:
         for script in template["PostChroot"]:
             run_command(script)
@@ -754,7 +755,7 @@ def post_install_chroot_shell(template, target_dir):
     """
     if not template.get("PostChrootShell"):
         return
-    LOG.info("Running post commands")
+    info("Running post commands")
     with ChrootOpen(target_dir) as _:
         for cmdl in template["PostChrootShell"]:
             run_command(cmdl, shell=True)
@@ -762,7 +763,7 @@ def post_install_chroot_shell(template, target_dir):
 def cleanup(args, template, target_dir, raise_exception=True):
     """Unmount and remove temporary files
     """
-    LOG.info("Cleaning up")
+    info("Cleaning up")
     if target_dir:
         if os.path.isdir("{0}/var/tmp".format(target_dir)):
             run_command("umount {0}".format(args.statedir),
@@ -1143,7 +1144,7 @@ def validate_template(template):
 
     This function will raise an Exception on finding an error.
     """
-    LOG.info("Validating configuration")
+    info("Validating configuration")
     if not template.get("DestinationType"):
         raise Exception("Missing DestinationType field")
     if not template.get("PartitionLayout"):
@@ -1176,8 +1177,8 @@ def validate_template(template):
         validate_proxy_url_template(template["HTTPProxy"])
     if template.get("cmdline"):
         validate_cmdline_template(template["cmdline"])
-    LOG.debug("Configuration is valid:")
-    LOG.debug(template)
+    debug("Configuration is valid:")
+    debug(template)
 
 
 def check_kernel_cmdline(f_kcmdline, sleep_time=15):
@@ -1186,8 +1187,8 @@ def check_kernel_cmdline(f_kcmdline, sleep_time=15):
     Kernel command line trumps ister invocation args.
     Return a tuple (True/False, "path")
     """
-    LOG.debug("Inspecting kernel command line for ister.conf location")
-    LOG.debug("kernel command line file: {0}".format(f_kcmdline))
+    debug("Inspecting kernel command line for ister.conf location")
+    debug("kernel command line file: {0}".format(f_kcmdline))
     kernel_args = list()
     ister_conf_uri = None
     with open(f_kcmdline, "r") as file:
@@ -1196,12 +1197,12 @@ def check_kernel_cmdline(f_kcmdline, sleep_time=15):
         if opt.startswith("isterconf="):
             ister_conf_uri = opt.split("=")[1]
 
-    LOG.debug("ister_conf_uri = {0}".format(ister_conf_uri))
+    debug("ister_conf_uri = {0}".format(ister_conf_uri))
 
     # Fetch the file
     if ister_conf_uri:
         tmpfd, abs_path = tempfile.mkstemp()
-        LOG.debug("ister_conf tmp file = {0}".format(abs_path))
+        debug("ister_conf tmp file = {0}".format(abs_path))
         # in a PXE environment it's possible systemd launched us
         # before the network is up. This is primitive but effective.
         # And generally only pxe boots will trigger this.
@@ -1218,23 +1219,23 @@ def get_host_from_url(url):
     """ Given url, return the host:port portion
         Try to be protocol agnostic
     """
-    LOG.debug("Extracting host component of cloud-init-svc url")
+    debug("Extracting host component of cloud-init-svc url")
     parsed = urlparse(url)
-    LOG.debug("URL parsed")
+    debug("URL parsed")
     return parsed.hostname or None
 
 
 def get_iface_for_host(host):
     """ Get interface being used to reach host
     """
-    LOG.debug("Finding interface used to reach {0}".format(host))
+    debug("Finding interface used to reach {0}".format(host))
     ip_addr = socket.gethostbyname(host)
     cmd = "ip route show to match {0}".format(ip_addr)
     iface = None
 
     output, ret = run_command(cmd)
-    LOG.debug("Output from ip route show...")
-    LOG.debug(output)
+    debug("Output from ip route show...")
+    debug(output)
     if ret == 0:
         match = re.match(r'.*dev (\w+)', output[-1])
         iface = match.group(1)
@@ -1247,14 +1248,14 @@ def get_mac_for_iface(iface):
     """ Get the MAC address for iface
     """
     # pylint: disable=E1101
-    LOG.debug("Determining MAC address for iface {0}".format(iface))
+    debug("Determining MAC address for iface {0}".format(iface))
     try:
         addrs = netifaces.ifaddresses(iface)
     except Exception:
         return None
     macs = addrs[netifaces.AF_LINK]
     mac = macs[0].get('addr')
-    LOG.debug("FOUND MAC address {0}".format(mac))
+    debug("FOUND MAC address {0}".format(mac))
     return mac
 
 
@@ -1262,8 +1263,8 @@ def fetch_cloud_init_configs(src_url, mac):
     """ Fetch the json configs from ister-cloud-init-svc for mac
     """
     src_url += 'get_config/{0}'.format(mac)
-    LOG.debug("Fetching cloud init configs from:\n"
-              "\t{0}".format(src_url))
+    debug("Fetching cloud init configs from:\n"
+          "\t{0}".format(src_url))
     try:
         json_file = request.urlopen(src_url)
     except Exception:
@@ -1284,20 +1285,20 @@ def get_cloud_init_configs(icis_source):
     # extract hostname/ip from url
     host = get_host_from_url(icis_source)
     if not host:
-        LOG.debug("Could not extract hostname for ister cloud "
-                  "init service from url: {0}".format(icis_source))
+        debug("Could not extract hostname for ister cloud "
+              "init service from url: {0}".format(icis_source))
         return None
 
     # get interface being used to communicate
     iface = get_iface_for_host(host)
     if not iface:
-        LOG.debug("No route to ister-cloud-init-svc host?"
-                  "  Failed to find interface for route")
+        debug("No route to ister-cloud-init-svc host?"
+              "  Failed to find interface for route")
         return None
 
     mac = get_mac_for_iface(iface)
     if not mac:
-        LOG.debug("Could not find MAC for iface: {0}".format(iface))
+        debug("Could not find MAC for iface: {0}".format(iface))
         return None
 
     # query icis service for confs
@@ -1312,7 +1313,7 @@ def fetch_cloud_init_role(icis_source, role, target_dir):
     """
     icis_role_url = icis_source + "get_role/" + role
     out_file = target_dir + "/etc/cloud-init-user-data"
-    LOG.debug("Fetching role file from {0}".format(icis_role_url))
+    debug("Fetching role file from {0}".format(icis_role_url))
 
     with request.urlopen(icis_role_url) as response:
         with closing(open(out_file, 'wb')) as out_file:
@@ -1323,7 +1324,7 @@ def modify_cloud_init_service_file(target_dir):
     """ Modify cloud-init service file to use userdata file
         that was just installed.
     """
-    LOG.debug("Updating cloud-init.service to user role file for user-data")
+    debug("Updating cloud-init.service to user role file for user-data")
     cloud_init_file = target_dir + "/usr/lib/systemd/system/ucd.service"
 
     with open(cloud_init_file, "r") as service_file:
@@ -1359,7 +1360,7 @@ def parse_config(args):
 
     This function will raise an Exception on finding an error.
     """
-    LOG.info("Reading configuration")
+    info("Reading configuration")
     config = {}
 
     kcmdline, kconf_file = check_kernel_cmdline(args.kcmdline)
@@ -1385,7 +1386,7 @@ def parse_config(args):
         else:
             config["template"] = "file://" + os.path.\
                                  abspath(args.template_file)
-    LOG.debug("File found: {0}".format(config["template"]))
+    debug("File found: {0}".format(config["template"]))
     return config
 
 
@@ -1419,39 +1420,17 @@ def install_os(args, template):
         set_static_configuration(template, target_dir)
         set_kernel_cmdline_appends(template, target_dir)
         if template.get("IsterCloudInitSvc"):
-            LOG.debug("Detected IsterCloudInitSvc directive")
+            debug("Detected IsterCloudInitSvc directive")
             cloud_init_configs(template, target_dir)
         post_install_nonchroot(template, target_dir)
         post_install_nonchroot_shell(template, target_dir)
         post_install_chroot(template, target_dir)
         post_install_chroot_shell(template, target_dir)
     except Exception as excep:
-        LOG.error("Couldn't install ClearLinux")
+        error("Couldn't install ClearLinux")
         raise excep
     finally:
         cleanup(args, template, target_dir, False)
-
-
-def handle_logging(level, logfile, shandler=logging.StreamHandler(sys.stdout)):
-    """Setup log levels and direct logs to a file"""
-    # Apparently the LOG object's level trumps level of handler?
-    LOG.setLevel(logging.DEBUG)
-
-    shandler.setLevel(logging.INFO)
-    if level == 'debug':
-        shandler.setLevel(logging.DEBUG)
-    elif level == 'error':
-        shandler.setLevel(logging.ERROR)
-    LOG.addHandler(shandler)
-
-    if logfile:
-        open(logfile, 'w').close()
-        fhandler = logging.FileHandler(logfile)
-        fhandler.setLevel(logging.DEBUG)
-        formatter = logging.Formatter(
-            '%(asctime)s-%(levelname)s: %(message)s')
-        fhandler.setFormatter(formatter)
-        LOG.addHandler(fhandler)
 
 
 def handle_options(sys_args):
@@ -1503,22 +1482,20 @@ def handle_options(sys_args):
 def main():
     """Start the installer
     """
-    global LOG
     args = handle_options(sys.argv[1:])
 
-    LOG = logging.getLogger(__name__)
-    handle_logging(args.loglevel, args.logfile)
+    setup_logging(args.loglevel, args.logfile)
 
     try:
         configuration = parse_config(args)
         template = get_template(configuration["template"])
         install_os(args, template)
     except Exception as exep:
-        LOG.debug("Failed: {}".format(repr(exep)))
+        debug("Failed: {}".format(repr(exep)))
         # TODO: Add arg for loglevel to -v
         # And change this to trigger on DEBUG level
         if DEBUG:
             traceback.print_exc()
         sys.exit(-1)
-    LOG.info("Successful installation")
+    info("Successful installation")
     sys.exit(0)
